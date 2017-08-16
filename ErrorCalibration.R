@@ -5,18 +5,7 @@ library(randomForest)
 library(Metrics)
 library(RColorBrewer)
 library(flexclust)
-
-
-#Read and format data
-houses<-read.csv('cleaned_data_zillow.csv')
-#Convert yr_built and yr_renovated to duration
-#houses$yr_built<-2015-houses$yr_built
-#houses$yr_renovated[houses$yr_renovated==0]<-houses$yr_built[houses$yr_renovated==0]
-#houses$yr_renovated[houses$yr_renovated>1000]<-2015-houses$yr_renovated[houses$yr_renovated>1000]
-#Drop "ID" and "Date"
-#houses<-houses[,!colnames(houses) %in% c("id","date")]
-#summary(houses)
-#sapply(houses, class)
+library(beepr)
 
 getTestError=function(houses){
   #cross-validation
@@ -53,7 +42,15 @@ getTestError=function(houses){
 }
 
 
-number.cl=1
+#Read and format data
+houses<-read.csv('cleaned_data_zillow.csv')
+testErrorAll = read.csv('testError5CV.csv', header = T)
+choose.pc=c(9,11)
+k=10
+crossVlidationNumber=5
+errorThreshold=0.1
+
+numCluster=0
 capture.ob<-data.frame()
 capture.size=vector()
 capture.mean=vector()
@@ -61,102 +58,92 @@ capture.var=vector()
 train.cl.mean=vector()
 train.cl.var=vector()
 train.cl.size=vector()
-clusters.all=data.frame()
 
-n<-floor(0.1*nrow(houses))
-residual = read.csv('residual.csv', header = T)
-choose.pc=c(9,11)
-k=10
-
-0.1*nrow(houses)
-n<-floor(0.2*nrow(houses))
-for(i in 1:1){
+n<-floor((1/crossVlidationNumber)*nrow(houses))
+for(i in 1:crossVlidationNumber-1){
+  cat("start: ", i)
+  
+  #get train and test
   testset<-houses[(n*(i-1)+1):(i*n), ]
   trainset<-houses[-((n*(i-1)+1):(i*n)), ]
   testError=getTestError(houses = trainset)
-}
-
-i=1 #get train and test
-testset<-houses[(n*(i-1)+1):(i*n), ]
-trainset<-houses[-((n*(i-1)+1):(i*n)), ]
-testError=getTestError(houses = trainset)
-
-#also the residual result of train and test
-test.residual<-residual[(n*(i-1)+1):(i*n), ]
-train.residual<-residual[-((n*(i-1)+1):(i*n)), ]
-
-#apply pca on train
-pr.out=prcomp(trainset[,2:19], scale=TRUE)
-sales_pc=data.frame(pr.out$x)
-
-#kmeans on pc2 and pc17
-sales_use=sales_pc[,choose.pc]
-
-#run kmeans
-set.seed(1)
-cl1 = kcca(sales_use, k, kccaFamily("kmeans"))
-testError=cbind(testError, predict(cl1))
-colnames(cluster)[4] = "km.out$cluster"
-cluster$error.pct=cluster$Residual/cluster$Prediction
-
-#capture the clusters with high test error
-cluster.large.error=vector()
-for(j in 1:k){
-  cluster.mean=abs(mean(testError$ErrorPercentage[testError$`km.out$cluster`==i]))
-  if(cluster.mean>0.1){
-    train.cl.mean=c(train.cl.mean, cluster.mean)
-    train.cl.var=c(train.cl.var, var(cluster$error.pct[cluster$`km.out$cluster`==j]))
-    train.cl.size=c(train.cl.size, sum(cluster$`km.out$cluster`==j))
-    cluster.large.error <- c(cluster.large.error, j)
-    cat(", get cluster", j)
-  }
-}
-
-# calculate the mean, variance of the error percentage in each cluster, and the size of each cluster
-cluster.mean=0
-cluster.var=0
-cluster.size=0
-for(i in 1:k){
-  cluster.mean[i]=abs(mean(testError$ErrorPercentage[testError$`km.out$cluster`==i]))
-  cluster.var[i]=var(testError$ErrorPercentage[testError$`km.out$cluster`==i])
-  cluster.size[i]=sum(testError$`km.out$cluster`==i)
+  write.csv(testError,file = paste("testErrorTainset10CV", i, ".csv", sep = ""))
   
-  # plot the histogram of the cluster if the mean of error percentage is larger than 10%
-  if(cluster.mean[i]>0.1)  hist(testError$ErrorPercentage[cluster$`km.out$cluster`==i])
+  #also the residual result of train and test
+  testErrorTestset<-testErrorAll[(n*(i-1)+1):(i*n), ]
+  
+  #apply pca on train
+  pr.out=prcomp(trainset[,2:19], scale=TRUE)
+  sales_pc=data.frame(pr.out$x)
+  
+  #kmeans on pc2 and pc17
+  sales_use=sales_pc[,choose.pc]
+  
+  #run kmeans
+  set.seed(1)
+  cl1 = kcca(sales_use, k, kccaFamily("kmeans"))
+  testError=cbind(testError, predict(cl1))
+  
+  #capture the clusters with high test error
+  cluster.large.error=vector()
+  for(j in 1:k){
+    cluster.mean=abs(mean(testError$ErrorPercentage[testError$`predict(cl1)`==j]))
+    if(cluster.mean>errorThreshold){
+      train.cl.mean=c(train.cl.mean, cluster.mean)
+      train.cl.var=c(train.cl.var, var(testError$ErrorPercentage[testError$`predict(cl1)`==j]))
+      train.cl.size=c(train.cl.size, sum(testError$`predict(cl1)`==j))
+      cluster.large.error <- c(cluster.large.error, j)
+      cat(", get cluster", j, " in training set with average test error percentage higher than ", errorThreshold)
+    }
+  }
+  #use the captured clusters to predict test data
+  #test data PCA
+  test.pc=predict(pr.out, testset[,2:19])
+  test.pc=test.pc[,choose.pc]
+  
+  #predict cluster
+  pred.cl <- predict(cl1, test.pc)
+  testErrorTestset = cbind(testErrorTestset, pred.cl)
+  for(j in cluster.large.error){
+    select.cl=testErrorTestset[testErrorTestset$pred.cl==j,]
+    if(nrow(select.cl)==0) {
+      capture.mean=c(capture.mean, NA)
+      capture.var=c(capture.var, NA)
+      capture.size=c(capture.size, NA)
+      next
+    }
+    numCluster=numCluster+1
+    select.cl[,'pred.cl']=numCluster
+    select.cl$origin.cl=j
+    capture.mean=c(capture.mean, mean(select.cl$ErrorPercentage))
+    capture.var=c(capture.var, var(select.cl$ErrorPercentage))
+    capture.size=c(capture.size, nrow(select.cl))
+    capture.ob=rbind(capture.ob, select.cl)
+    
+    hist(select.cl$ErrorPercentage)
+    cat("Cluster ", (numCluster), " captured: size", (capture.size), ", mean test error percentage", capture.mean)
+  }
+  print("")
 }
 
-# clusters info
-cluster.anlysis=data.frame(cbind(1:k, cluster.mean, cluster.var))
+capture.size
+capture.var
+capture.mean
+plot(capture.mean)
+sum(capture.size)
+for(i in 1:10){
+  hist(capture.ob[capture.ob$pred.cl==i, "error.pct"])
+}
+hist(capture.ob[capture.ob$origin.cl==1, "error.pct"])
+hist(capture.ob[capture.ob$origin.cl==4, "error.pct"])
+hist(capture.ob[capture.ob$origin.cl==8, "error.pct"])
+hist(capture.ob[capture.ob$origin.cl==23, "error.pct"])
+abs(capture.mean)>0.2
+cols<-brewer.pal(n=9,name="Set1")
 
-# plot cluster info
-cols = brewer.pal(n=8,name="Set1")
-plot(cluster.mean, col=cols[1], pch=5, lwd=2, main='Absolute Average Test Error Percentage of Each Clusters', 
-     sub='The clusters are from K-means Clustering(K=10) on PC9 and PC11', 
-     xlab = 'Cluster', ylab='Absolute Average Error Percentage(Test Error/Predictied Values)')
-points(cluster.var, col=cols[2])
-cluster.size
-
-hist(cluster$error.pct[cluster$`km.out$cluster`==11])
-hist(cluster$error.pct[cluster$`km.out$cluster`==15])
-
-#k=20 cluster=11
-#k=15 cluster=4
-#PC15-PC19 k=30
-#PC15-PC19 k=15
-#PC2+PC17!!!!
-
-#show cluster on PC2 and PC17
-plot(sales_pc[,c(2,17)], main='4 Clusters with High Test Error Percentage (>20%) on PC2 and PC17', sub='The clusters are from K-means Clustering(K=30) on PC2 and PC17')
-plot.select=sales_pc[(cluster$`km.out$cluster`==c(14, 20, 23, 25)),c(2,17)]
-plot.cols=cluster$`km.out$cluster`[cluster$`km.out$cluster`==c(14, 20, 23, 25)]
-points(sales_pc[(cluster$`km.out$cluster`==c(14, 20, 23, 25)),c(2,17)], col=plot.cols, pch=1, cex=2,lwd=2)
-legend(x=-4,y=8,legend=paste(c("cluster 14","cluster 20","cluster 23","cluster 25")),col=c(14, 20, 23, 25),bty="n", pch=1, cex=1.5 )
-
-
-#show cluster on residual
-#when k=30
-plot(cluster$Prediction, cluster$error.pct, main='4 Clusters with High Test Error Percentage (>20%) on Error Percentage Plot', 
-     sub='The clusters are from K-means Clustering(K=30) on PC2 and PC17', xlab = 'Predicted Values', ylab='Error Percentage(Test Error/Predictied Values)')
-plot.cols=cluster$`km.out$cluster`[cluster$`km.out$cluster`==c(14, 20, 23, 25)]
-points(cluster[(cluster$`km.out$cluster`==c(14, 20, 23, 25)),c('Prediction', 'error.pct')], col=plot.cols, pch=1, cex=2,lwd=2)
-legend(x=2300000,y=-0.8,legend=paste(c("cluster 14: -26% average test error","cluster 20: -28% average test error","cluster 23: -36% average test error","cluster 25: -34% average test error")),col=c(14, 20, 23, 25),bty="n", pch=1, cex=1.5 )
+plot(train.cl.mean, col=cols[2], ylim=c(-.6, 0.2), lwd=2, main='Average Test Error Percentage of Each Clusters and Predicted Cluster', 
+     sub='The clusters are chosen from 10-Fold Cross Validation', 
+     xlab = 'Clusters with High Error Percentage (>+/-10%)', ylab='Average Error Percentage(Test Error/Predictied Values)')
+points(capture.mean, col=cols[1], pch=5, lwd=2)
+legend(x=0.8,y=0.25,legend=paste(c("Clusters from Applying K-means (K=10) on Train Set","Clusters of the k-means Prediction on Test Set")),
+       col=cols[c(2, 1)],bty="n", pch=c(1,5), cex=1.5, lwd=2)
