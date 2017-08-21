@@ -1,5 +1,5 @@
 # House-Price-Prediction-in-King-County
-### A data mining course (ORIE4740) project studying house pricing at Cornell University, with Dr. Madeleine Udell
+### A data mining course (ORIE4740) project studying house sales at Cornell University, with Dr. Yudong Chen
 
 
 The main collaborators are: 
